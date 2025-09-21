@@ -71,7 +71,14 @@ class GRPOTrainer:
         }
 
     def _save_training_metrics(
-        self, iteration, step, grpo_iter, loss, avg_reward, rollout_data
+        self,
+        iteration,
+        step,
+        grpo_iter,
+        loss,
+        avg_reward,
+        rollout_data,
+        reward_breakdown=None,
     ):
         """保存训练指标"""
         self.step_count += 1
@@ -90,6 +97,10 @@ class GRPOTrainer:
             "avg_reward": float(avg_reward),
             "output_stats": output_stats,
         }
+
+        # 添加奖励分解信息
+        if reward_breakdown:
+            metrics["reward_breakdown"] = reward_breakdown
 
         self.metrics_history.append(metrics)
 
@@ -142,16 +153,16 @@ class GRPOTrainer:
         self.model = self.optimize_model_memory()
 
         # 训练配置
-        num_iterations = self.config.get("num_iterations", 1)
-        num_steps = self.config.get("num_steps", 500)
-        batch_size = self.config.get("batch_size", 4)
-        num_generations = self.config.get("num_generations", 4)
-        max_completion_length = self.config.get("max_completion_length", 128)
-        beta = self.config.get("beta", 0.1)
-        learning_rate = self.config.get("learning_rate", 5e-6)
-        mu = self.config.get("mu", 3)
-        epsilon = self.config.get("epsilon", 0.2)
-        grad_clip_norm = self.config.get("grad_clip_norm", 0.1)
+        num_iterations = int(self.config.get("num_iterations", 1))
+        num_steps = int(self.config.get("num_steps", 500))
+        batch_size = int(self.config.get("batch_size", 4))
+        num_generations = int(self.config.get("num_generations", 4))
+        max_completion_length = int(self.config.get("max_completion_length", 128))
+        beta = float(self.config.get("beta", 0.1))
+        learning_rate = float(self.config.get("learning_rate", 5e-6))
+        mu = int(self.config.get("mu", 3))
+        epsilon = float(self.config.get("epsilon", 0.2))
+        grad_clip_norm = float(self.config.get("grad_clip_norm", 0.1))
 
         # 外层循环：迭代GRPO更新
         for iteration in range(num_iterations):
@@ -200,9 +211,31 @@ class GRPOTrainer:
                     )
                     optimizer.step()
 
+                    # 计算分开的奖励
+                    from ..rewards.rewards import correctness_reward, format_reward
+
+                    correctness_scores = correctness_reward(
+                        prompts=rollout_data["repeated_prompts"],
+                        completions=rollout_data["formatted_completions"],
+                        answer=rollout_data["repeated_answers"],
+                    )
+                    format_scores = format_reward(
+                        completions=rollout_data["formatted_completions"]
+                    )
+
+                    avg_correctness = sum(correctness_scores) / len(correctness_scores)
+                    avg_format = sum(format_scores) / len(format_scores)
+
+                    reward_breakdown = {
+                        "avg_correctness_reward": float(avg_correctness),
+                        "avg_format_reward": float(avg_format),
+                        "avg_combined_reward": float(avg_reward),
+                    }
+
                     print(
                         f"Iteration {iteration+1}/{num_iterations}, Step {step+1}/{num_steps}, "
-                        f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}, avg_reward: {avg_reward:.4f}"
+                        f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}, avg_reward: {avg_reward:.4f}, "
+                        f"correctness: {avg_correctness:.4f}, format: {avg_format:.4f}"
                     )
 
                     # 保存训练指标
@@ -213,6 +246,7 @@ class GRPOTrainer:
                         loss.item(),
                         avg_reward,
                         rollout_data,
+                        reward_breakdown,
                     )
 
                 # 保存检查点（每50步）

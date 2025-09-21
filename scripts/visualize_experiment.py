@@ -43,18 +43,57 @@ def plot_loss(metrics, save_path):
 def plot_reward(metrics, save_path):
     """绘制reward曲线"""
     steps = [m["step_count"] for m in metrics]
-    rewards = [m["avg_reward"] for m in metrics]
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(steps, rewards, "g-", linewidth=1)
-    plt.title("Average Reward Over Time")
-    plt.xlabel("Training Steps")
-    plt.ylabel("Average Reward")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    plt.close()
-    print(f"Reward图表已保存: {save_path}")
+    # 检查是否有奖励分解数据
+    has_breakdown = any("reward_breakdown" in m for m in metrics)
+
+    if has_breakdown:
+        # 分别绘制correctness和format reward
+        correctness_rewards = []
+        format_rewards = []
+        combined_rewards = []
+
+        for m in metrics:
+            if "reward_breakdown" in m:
+                correctness_rewards.append(
+                    m["reward_breakdown"]["avg_correctness_reward"]
+                )
+                format_rewards.append(m["reward_breakdown"]["avg_format_reward"])
+                combined_rewards.append(m["reward_breakdown"]["avg_combined_reward"])
+            else:
+                # 兼容旧数据
+                correctness_rewards.append(0)
+                format_rewards.append(0)
+                combined_rewards.append(m["avg_reward"])
+
+        plt.figure(figsize=(12, 8))
+        plt.plot(steps, combined_rewards, "g-", linewidth=2, label="Combined Reward")
+        plt.plot(
+            steps, correctness_rewards, "b-", linewidth=1.5, label="Correctness Reward"
+        )
+        plt.plot(steps, format_rewards, "r-", linewidth=1.5, label="Format Reward")
+        plt.title("Reward Breakdown Over Time")
+        plt.xlabel("Training Steps")
+        plt.ylabel("Average Reward")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"Reward分解图表已保存: {save_path}")
+    else:
+        # 兼容旧版本，只有总奖励
+        rewards = [m["avg_reward"] for m in metrics]
+        plt.figure(figsize=(12, 6))
+        plt.plot(steps, rewards, "g-", linewidth=1)
+        plt.title("Average Reward Over Time")
+        plt.xlabel("Training Steps")
+        plt.ylabel("Average Reward")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
+        print(f"Reward图表已保存: {save_path}")
 
 
 def plot_output_length(metrics, save_path):
@@ -101,7 +140,12 @@ def plot_loss_vs_reward(metrics, save_path):
 
 def plot_training_progress(metrics, save_path):
     """绘制训练进度综合图"""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    has_breakdown = any("reward_breakdown" in m for m in metrics)
+
+    if has_breakdown:
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    else:
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
 
     steps = [m["step_count"] for m in metrics]
 
@@ -113,10 +157,34 @@ def plot_training_progress(metrics, save_path):
     ax1.set_ylabel("Loss")
     ax1.grid(True, alpha=0.3)
 
-    # Reward
-    rewards = [m["avg_reward"] for m in metrics]
-    ax2.plot(steps, rewards, "g-", linewidth=1)
-    ax2.set_title("Average Reward")
+    # Reward (with breakdown if available)
+    if has_breakdown:
+        correctness_rewards = []
+        format_rewards = []
+        combined_rewards = []
+
+        for m in metrics:
+            if "reward_breakdown" in m:
+                correctness_rewards.append(
+                    m["reward_breakdown"]["avg_correctness_reward"]
+                )
+                format_rewards.append(m["reward_breakdown"]["avg_format_reward"])
+                combined_rewards.append(m["reward_breakdown"]["avg_combined_reward"])
+            else:
+                correctness_rewards.append(0)
+                format_rewards.append(0)
+                combined_rewards.append(m["avg_reward"])
+
+        ax2.plot(steps, combined_rewards, "g-", linewidth=2, label="Combined")
+        ax2.plot(steps, correctness_rewards, "b-", linewidth=1, label="Correctness")
+        ax2.plot(steps, format_rewards, "r-", linewidth=1, label="Format")
+        ax2.set_title("Reward Breakdown")
+        ax2.legend()
+    else:
+        rewards = [m["avg_reward"] for m in metrics]
+        ax2.plot(steps, rewards, "g-", linewidth=1)
+        ax2.set_title("Average Reward")
+
     ax2.set_xlabel("Steps")
     ax2.set_ylabel("Reward")
     ax2.grid(True, alpha=0.3)
@@ -130,10 +198,17 @@ def plot_training_progress(metrics, save_path):
     ax3.grid(True, alpha=0.3)
 
     # Loss vs Reward
-    ax4.scatter(losses, rewards, alpha=0.6, c=steps, cmap="viridis")
-    ax4.set_title("Loss vs Reward")
+    if has_breakdown:
+        combined_rewards_for_scatter = combined_rewards
+    else:
+        combined_rewards_for_scatter = [m["avg_reward"] for m in metrics]
+
+    ax4.scatter(
+        losses, combined_rewards_for_scatter, alpha=0.6, c=steps, cmap="viridis"
+    )
+    ax4.set_title("Loss vs Combined Reward")
     ax4.set_xlabel("Loss")
-    ax4.set_ylabel("Reward")
+    ax4.set_ylabel("Combined Reward")
     ax4.grid(True, alpha=0.3)
 
     plt.tight_layout()

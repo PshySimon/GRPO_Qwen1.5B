@@ -1,11 +1,11 @@
-# 训练配置
+# 训练配置 - 原始grpo.py配置
 num_iterations: 1
 num_steps: 1000
-batch_size: 2
-num_generations: 8
-max_completion_length: 400
+batch_size: 2          # 原始配置
+num_generations: 8     # 原始配置
+max_completion_length: 400  # 原始配置
 beta: 0.04
 learning_rate: 5e-6
-mu: 1
+mu: 1                  # 原始配置
 epsilon: 0.1
 grad_clip_norm: 0.1
