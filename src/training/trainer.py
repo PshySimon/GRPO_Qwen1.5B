@@ -1,7 +1,10 @@
 """GRPO训练器"""
 
 import copy
+import json
+import os
 import random
+from datetime import datetime
 
 import torch
 
@@ -25,6 +28,86 @@ class GRPOTrainer:
         self.tokenizer = tokenizer
         self.config = config
         self.device = get_device()
+
+        # 创建实验目录
+        self.experiment_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.experiment_dir = f"output/experiments/exp_{self.experiment_id}"
+        os.makedirs(self.experiment_dir, exist_ok=True)
+        os.makedirs(f"{self.experiment_dir}/checkpoints", exist_ok=True)
+        os.makedirs(f"{self.experiment_dir}/metrics", exist_ok=True)
+        os.makedirs(f"{self.experiment_dir}/samples", exist_ok=True)
+
+        # 初始化指标记录
+        self.metrics_history = []
+        self.step_count = 0
+
+        # 保存实验配置
+        self._save_experiment_config()
+
+    def _save_experiment_config(self):
+        """保存实验配置"""
+        config_data = {
+            "experiment_id": self.experiment_id,
+            "timestamp": datetime.now().isoformat(),
+            "config": self.config,
+        }
+
+        with open(f"{self.experiment_dir}/experiment_config.json", "w") as f:
+            json.dump(config_data, f, indent=2, default=str)
+
+    def _calculate_output_stats(self, rollout_data):
+        """计算输出文本统计信息"""
+        completions = rollout_data["formatted_completions"]
+
+        lengths = []
+        for completion in completions:
+            text = completion[0]["content"]
+            lengths.append(len(text.split()))  # 词数
+
+        return {
+            "avg_output_length": sum(lengths) / len(lengths),
+            "min_output_length": min(lengths),
+            "max_output_length": max(lengths),
+        }
+
+    def _save_training_metrics(
+        self, iteration, step, grpo_iter, loss, avg_reward, rollout_data
+    ):
+        """保存训练指标"""
+        self.step_count += 1
+
+        # 计算输出统计
+        output_stats = self._calculate_output_stats(rollout_data)
+
+        metrics = {
+            "experiment_id": self.experiment_id,
+            "timestamp": datetime.now().isoformat(),
+            "step_count": self.step_count,
+            "iteration": iteration,
+            "step": step,
+            "grpo_iter": grpo_iter,
+            "loss": float(loss),
+            "avg_reward": float(avg_reward),
+            "output_stats": output_stats,
+        }
+
+        self.metrics_history.append(metrics)
+
+        # 保存到文件
+        with open(f"{self.experiment_dir}/metrics/training_metrics.json", "w") as f:
+            json.dump(self.metrics_history, f, indent=2)
+
+    def _save_checkpoint(self, iteration, step):
+        """保存模型检查点"""
+        checkpoint_dir = (
+            f"{self.experiment_dir}/checkpoints/iteration_{iteration}_step_{step}"
+        )
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+        self.model.save_pretrained(checkpoint_dir)
+        self.tokenizer.save_pretrained(checkpoint_dir)
+
+        print(f"Checkpoint saved: {checkpoint_dir}")
 
     def optimize_model_memory(self):
         """
@@ -121,5 +204,19 @@ class GRPOTrainer:
                         f"Iteration {iteration+1}/{num_iterations}, Step {step+1}/{num_steps}, "
                         f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}, avg_reward: {avg_reward:.4f}"
                     )
+
+                    # 保存训练指标
+                    self._save_training_metrics(
+                        iteration + 1,
+                        step + 1,
+                        grpo_iter + 1,
+                        loss.item(),
+                        avg_reward,
+                        rollout_data,
+                    )
+
+                # 保存检查点（每50步）
+                if (step + 1) % 50 == 0:
+                    self._save_checkpoint(iteration + 1, step + 1)
 
         return self.model

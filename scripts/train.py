@@ -60,13 +60,16 @@ def main():
     model = trainer.train(train_data, reward_function=combined_reward)
 
     logger.info("Training completed.")
+    logger.info(f"实验数据保存在: {trainer.experiment_dir}")
 
-    # 保存模型
-    logger.info("\nSaving GRPO fine-tuned model...")
-    model.save_pretrained("grpo_finetuned_model")
-    tokenizer.save_pretrained("grpo_finetuned_model")
+    # 保存最终模型到实验目录
+    final_model_dir = f"{trainer.experiment_dir}/final_model"
+    model.save_pretrained(final_model_dir)
+    tokenizer.save_pretrained(final_model_dir)
 
-    logger.info("Model saved successfully!")
+    logger.info(f"最终模型保存在: {final_model_dir}")
+    logger.info("使用以下命令查看训练图表:")
+    logger.info(f"python scripts/visualize_experiment.py {trainer.experiment_dir}")
 
 
 if __name__ == "__main__":
