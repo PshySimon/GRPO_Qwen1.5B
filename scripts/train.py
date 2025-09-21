@@ -1,6 +1,10 @@
 """训练脚本"""
 
+import argparse
+import os
+
 import torch
+import yaml
 from src.data.dataset import prepare_dataset, split_dataset
 from src.rewards.rewards import combined_reward
 from src.training.trainer import GRPOTrainer
@@ -10,41 +14,112 @@ from src.utils.random import set_random_seed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+def load_resume_config():
+    """加载断点续训配置"""
+    resume_file = "config/resume.yaml"
+    if os.path.exists(resume_file):
+        with open(resume_file, "r") as f:
+            return yaml.safe_load(f)
+    return None
+
+
 def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="GRPO训练脚本")
+    parser.add_argument("--resume", action="store_true", help="从断点续训")
+    args = parser.parse_args()
+
     # 设置随机种子
     set_random_seed(42)
 
-    # 加载所有配置
-    configs = load_all_configs()
-    training_config = configs["training"]
-    model_config = configs["model"]
-    logging_config = configs["logging"]
+    # 检查是否续训
+    resume_config = None
+    if args.resume:
+        resume_config = load_resume_config()
+        if resume_config:
+            print(
+                f"发现断点续训配置，将从实验 {resume_config['experiment_id']} 继续训练"
+            )
+        else:
+            print("未找到断点续训配置，将从头开始训练")
+
+    # 加载配置
+    if resume_config:
+        # 使用保存的配置
+        training_config = resume_config["config"]
+        configs = load_all_configs()
+        model_config = configs["model"]
+        logging_config = configs["logging"]
+        print("使用断点续训配置")
+    else:
+        # 使用默认配置
+        configs = load_all_configs()
+        training_config = configs["training"]
+        model_config = configs["model"]
+        logging_config = configs["logging"]
 
     # 设置日志
     logger = setup_logger(logging_config["log_dir"], logging_config["level"])
 
-    logger.info("Downloading model...")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_config["model_name"],
-        attn_implementation=model_config["attn_implementation"],
-        torch_dtype=getattr(torch, model_config["torch_dtype"]),
-        device_map=model_config["device_map"],
-    )
-    logger.info("Model downloaded")
+    # 加载模型
+    if resume_config:
+        # 从检查点加载模型
+        checkpoint_dir = resume_config["experiment_dir"] + "/checkpoints"
+        if os.path.exists(checkpoint_dir):
+            # 找到最新的检查点
+            checkpoints = [
+                d for d in os.listdir(checkpoint_dir) if d.startswith("iteration_")
+            ]
+            if checkpoints:
+                latest_checkpoint = max(checkpoints)
+                model_path = os.path.join(checkpoint_dir, latest_checkpoint)
+                logger.info(f"从检查点加载模型: {model_path}")
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.float16,
+                )
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_path, padding_side="left"
+                )
+            else:
+                logger.info("未找到检查点，从原始模型开始")
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_config["model_name"],
+                    torch_dtype=torch.float16,
+                )
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_config["model_name"], padding_side="left"
+                )
+        else:
+            logger.info("检查点目录不存在，从原始模型开始")
+            model = AutoModelForCausalLM.from_pretrained(
+                model_config["model_name"],
+                torch_dtype=torch.float16,
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_config["model_name"], padding_side="left"
+            )
+    else:
+        logger.info("加载原始模型...")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_config["model_name"],
+            torch_dtype=torch.float16,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_config["model_name"], padding_side="left"
+        )
 
-    logger.info("model config:")
-    logger.info(model.config)
+    # 移动模型到设备
+    from src.utils.device import get_device
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_config["model_name"], padding_side="left"
-    )
+    device = get_device()
+    model = model.to(device)
 
     # 设置tokenizer配置
     model.config.pad_token_id = tokenizer.pad_token_id
     model.config.eos_token_id = tokenizer.eos_token_id
 
-    logger.info("model new config:")
-    logger.info(model.config)
+    logger.info("模型加载完成")
 
     # 准备数据
     all_data = prepare_dataset("train")
@@ -54,7 +129,7 @@ def main():
     logger.info(f"Evaluation data size: {len(eval_data)}")
 
     # 创建训练器
-    trainer = GRPOTrainer(model, tokenizer, training_config)
+    trainer = GRPOTrainer(model, tokenizer, training_config, resume_config)
 
     logger.info("\nStarting RL fine-tuning using GRPO...")
     model = trainer.train(train_data, reward_function=combined_reward)

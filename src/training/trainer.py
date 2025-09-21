@@ -15,7 +15,7 @@ from ..utils.device import get_device
 class GRPOTrainer:
     """GRPO训练器类"""
 
-    def __init__(self, model, tokenizer, config):
+    def __init__(self, model, tokenizer, config, resume_config=None):
         """
         初始化训练器
 
@@ -23,26 +23,42 @@ class GRPOTrainer:
             model: 要训练的模型
             tokenizer: 分词器
             config: 配置字典
+            resume_config: 断点续训配置
         """
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
         self.device = get_device()
 
-        # 创建实验目录
-        self.experiment_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.experiment_dir = f"output/experiments/exp_{self.experiment_id}"
-        os.makedirs(self.experiment_dir, exist_ok=True)
-        os.makedirs(f"{self.experiment_dir}/checkpoints", exist_ok=True)
-        os.makedirs(f"{self.experiment_dir}/metrics", exist_ok=True)
-        os.makedirs(f"{self.experiment_dir}/samples", exist_ok=True)
+        if resume_config:
+            # 从断点恢复
+            self._load_training_state(resume_config)
+            # 保存更新后的实验配置
+            self._save_experiment_config()
+        else:
+            # 创建新实验
+            self.experiment_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.experiment_dir = f"output/experiments/exp_{self.experiment_id}"
+            os.makedirs(self.experiment_dir, exist_ok=True)
+            os.makedirs(f"{self.experiment_dir}/checkpoints", exist_ok=True)
+            os.makedirs(f"{self.experiment_dir}/metrics", exist_ok=True)
+            os.makedirs(f"{self.experiment_dir}/samples", exist_ok=True)
 
-        # 初始化指标记录
-        self.metrics_history = []
-        self.step_count = 0
+            # 初始化指标记录
+            self.metrics_history = []
+            self.step_count = 0
 
-        # 保存实验配置
-        self._save_experiment_config()
+            # 保存实验配置
+            self._save_experiment_config()
+
+            # 初始化训练状态
+            self.training_state = {
+                "current_iteration": 0,
+                "current_step": 0,
+                "total_steps_completed": 0,
+                "best_reward": 0.0,
+                "experiment_dir": self.experiment_dir,
+            }
 
     def _save_experiment_config(self):
         """保存实验配置"""
@@ -120,6 +136,41 @@ class GRPOTrainer:
 
         print(f"Checkpoint saved: {checkpoint_dir}")
 
+    def _save_training_state(self):
+        """保存训练状态到resume.yaml"""
+        resume_config = {
+            "experiment_id": self.experiment_id,
+            "experiment_dir": self.experiment_dir,
+            "training_state": self.training_state,
+            "config": self.config,
+            "last_saved": datetime.now().isoformat(),
+        }
+
+        with open("config/resume.yaml", "w") as f:
+            import yaml
+
+            yaml.dump(resume_config, f, indent=2, default_flow_style=False)
+
+        print("训练状态已保存到 config/resume.yaml")
+
+    def _load_training_state(self, resume_config):
+        """从resume配置加载训练状态"""
+        self.experiment_id = resume_config["experiment_id"]
+        self.experiment_dir = resume_config["experiment_dir"]
+        self.training_state = resume_config["training_state"]
+
+        # 加载历史指标
+        metrics_file = f"{self.experiment_dir}/metrics/training_metrics.json"
+        if os.path.exists(metrics_file):
+            with open(metrics_file, "r") as f:
+                self.metrics_history = json.load(f)
+            self.step_count = len(self.metrics_history)
+
+        print(f"从断点恢复训练: {self.experiment_dir}")
+        print(
+            f"当前进度: Iteration {self.training_state['current_iteration']}, Step {self.training_state['current_step']}"
+        )
+
     def optimize_model_memory(self):
         """
         Optimizes the model to use less memory during training.
@@ -165,8 +216,12 @@ class GRPOTrainer:
         grad_clip_norm = float(self.config.get("grad_clip_norm", 0.1))
 
         # 外层循环：迭代GRPO更新
-        for iteration in range(num_iterations):
+        start_iteration = self.training_state["current_iteration"]
+        for iteration in range(start_iteration, num_iterations):
             print(f"\nIteration {iteration+1}/{num_iterations}")
+
+            # 更新训练状态
+            self.training_state["current_iteration"] = iteration
 
             # 创建参考模型（深拷贝）并设置为评估模式
             ref_model = copy.deepcopy(self.model)
@@ -180,7 +235,15 @@ class GRPOTrainer:
             self.model.train()
 
             # 内层循环：训练步骤
-            for step in range(num_steps):
+            start_step = (
+                self.training_state["current_step"]
+                if iteration == start_iteration
+                else 0
+            )
+            for step in range(start_step, num_steps):
+                # 更新训练状态
+                self.training_state["current_step"] = step
+                self.training_state["total_steps_completed"] += 1
                 batch_samples = random.sample(train_data, batch_size)
 
                 with torch.no_grad():
@@ -232,6 +295,10 @@ class GRPOTrainer:
                         "avg_combined_reward": float(avg_reward),
                     }
 
+                    # 更新最佳奖励
+                    if avg_reward > self.training_state["best_reward"]:
+                        self.training_state["best_reward"] = float(avg_reward)
+
                     print(
                         f"Iteration {iteration+1}/{num_iterations}, Step {step+1}/{num_steps}, "
                         f"GRPO iter {grpo_iter+1}/{mu}, loss: {loss.item():.4f}, avg_reward: {avg_reward:.4f}, "
@@ -249,8 +316,15 @@ class GRPOTrainer:
                         reward_breakdown,
                     )
 
-                # 保存检查点（每50步）
+                # 保存检查点和训练状态（每50步）
                 if (step + 1) % 50 == 0:
                     self._save_checkpoint(iteration + 1, step + 1)
+                    self._save_training_state()
+
+            # 每个iteration结束后重置step
+            self.training_state["current_step"] = 0
+
+        # 训练完成后保存最终状态
+        self._save_training_state()
 
         return self.model
