@@ -1,0 +1,6 @@
+# 模型配置
+model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+output_dir: "math_solver_model"
+attn_implementation: "flash_attention_2"
+torch_dtype: "bfloat16"
+device_map: "auto"

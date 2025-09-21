@@ -1,0 +1,7 @@
+# 日志配置
+level: "INFO"
+format: "%(asctime)s-%(filename)s:%(lineno)d-%(levelname)s >> %(message)s"
+date_format: "%Y-%m-%d %H:%M:%S"
+log_dir: "./output/logs"
+console_output: true
+file_output: true
