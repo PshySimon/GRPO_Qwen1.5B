@@ -72,3 +72,6 @@ wheel==0.45.1
 wmctrl==0.5
 xxhash==3.5.0
 yarl==1.18.3
+verl>=0.1.0
+matplotlib>=3.5.0
+tqdm>=4.64.0

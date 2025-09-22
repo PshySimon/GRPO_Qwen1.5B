@@ -66,77 +66,134 @@ def find_model_path(experiment_dir):
     return None
 
 
-def evaluate_model(model, tokenizer, eval_examples, device, verbose=False):
+def evaluate_model(
+    model, tokenizer, eval_examples, device, verbose=False, batch_size=1
+):
     """评估模型"""
     model.eval()
     correct = 0
     total = len(eval_examples)
 
     if verbose:
-        print(f"开始评估 {total} 个样本（详细模式）")
-        eval_iterator = eval_examples
+        print(f"开始评估 {total} 个样本（详细模式，batch_size={batch_size}）")
+
+    # 按batch_size分批处理
+    num_batches = (total + batch_size - 1) // batch_size
+
+    if not verbose:
+        batch_iterator = tqdm(range(num_batches), desc="评估进度", unit="batch")
     else:
-        eval_iterator = tqdm(eval_examples, desc="评估进度", unit="样本")
+        batch_iterator = range(num_batches)
 
-    for example in eval_iterator:
-        full_prompt = example["prompt"]
-        expected = example["answer"]
+    for batch_idx in batch_iterator:
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, total)
+        batch_examples = eval_examples[start_idx:end_idx]
 
-        # 推理
-        inputs = tokenizer.encode(
-            full_prompt, return_tensors="pt", padding=True, padding_side="left"
-        ).to(device)
+        if batch_size == 1:
+            # 单样本处理
+            example = batch_examples[0]
+            full_prompt = example["prompt"]
+            expected = example["answer"]
 
-        with torch.no_grad():
-            outputs = model.generate(
-                inputs,
-                max_new_tokens=512,
-                num_return_sequences=1,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-                early_stopping=False,
-                do_sample=False,  # 确定性生成
-            )
+            # 推理
+            inputs = tokenizer.encode(
+                full_prompt, return_tensors="pt", padding=True, padding_side="left"
+            ).to(device)
 
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            with torch.no_grad():
+                outputs = model.generate(
+                    inputs,
+                    max_new_tokens=512,
+                    num_return_sequences=1,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    early_stopping=False,
+                    do_sample=False,  # 确定性生成
+                    # 明确覆盖generation_config中的采样参数
+                    temperature=1.0,  # 虽然do_sample=False时不用，但明确指定避免警告
+                    top_p=1.0,
+                    top_k=0,
+                )
 
-        try:
-            # 提取答案并检查正确性
-            predicted = extract_answer_from_model_output(response)
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            responses = [response]
+            expected_answers = [expected]
+            prompts = [full_prompt]
+        else:
+            # 批量处理
+            prompts = [ex["prompt"] for ex in batch_examples]
+            expected_answers = [ex["answer"] for ex in batch_examples]
 
-            # 尝试不同的匹配方法
-            if predicted == expected:  # 精确匹配
-                is_correct = True
-            else:
-                # 尝试数字匹配
-                pred_num = extract_single_number(str(predicted))
-                exp_num = extract_single_number(str(expected))
-                if pred_num is not None and exp_num is not None and pred_num == exp_num:
+            inputs = tokenizer(
+                prompts, return_tensors="pt", padding=True, padding_side="left"
+            ).to(device)
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    max_new_tokens=512,
+                    num_return_sequences=1,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    early_stopping=False,
+                    do_sample=False,  # 确定性生成
+                    # 明确覆盖generation_config中的采样参数
+                    temperature=1.0,  # 虽然do_sample=False时不用，但明确指定避免警告
+                    top_p=1.0,
+                    top_k=0,
+                )
+
+            responses = [
+                tokenizer.decode(output, skip_special_tokens=True) for output in outputs
+            ]
+
+        # 处理每个响应
+        for response, expected, full_prompt in zip(
+            responses, expected_answers, prompts
+        ):
+            try:
+                # 提取答案并检查正确性
+                predicted = extract_answer_from_model_output(response)
+
+                # 尝试不同的匹配方法
+                if predicted == expected:  # 精确匹配
                     is_correct = True
                 else:
-                    # 尝试最后一个数字匹配
-                    pred_num = extract_last_number(str(predicted))
-                    exp_num = extract_last_number(str(expected))
-                    is_correct = (
+                    # 尝试数字匹配
+                    pred_num = extract_single_number(str(predicted))
+                    exp_num = extract_single_number(str(expected))
+                    if (
                         pred_num is not None
                         and exp_num is not None
                         and pred_num == exp_num
-                    )
+                    ):
+                        is_correct = True
+                    else:
+                        # 尝试最后一个数字匹配
+                        pred_num = extract_last_number(str(predicted))
+                        exp_num = extract_last_number(str(expected))
+                        is_correct = (
+                            pred_num is not None
+                            and exp_num is not None
+                            and pred_num == exp_num
+                        )
 
-            if is_correct:
-                correct += 1
+                if is_correct:
+                    correct += 1
 
-            # 详细输出
-            if verbose:
-                print(f"\n问题: {full_prompt[:100]}...")
-                print(f"期望答案: {expected}")
-                print(f"提取答案: {predicted}")
-                print(f"正确: {'✓' if is_correct else '✗'}")
-                print("-" * 50)
+                # 详细输出
+                if verbose:
+                    print(f"\n问题: {full_prompt[:100]}...")
+                    print(f"期望答案: {expected}")
+                    print(f"提取答案: {predicted}")
+                    print(f"正确: {'✓' if is_correct else '✗'}")
+                    print("-" * 50)
 
-        except Exception as e:
-            if verbose:
-                print(f"解析失败: {e}")
+            except Exception as e:
+                if verbose:
+                    print(f"解析失败: {e}")
 
     # 计算并显示最终准确率
     accuracy = (correct / total) * 100
@@ -153,6 +210,9 @@ def main():
     parser.add_argument("--experiment", type=str, help="指定实验目录")
     parser.add_argument("--baseline", action="store_true", help="评估原始基准模型")
     parser.add_argument("--verbose", action="store_true", help="显示详细输出")
+    parser.add_argument(
+        "--batch_size", type=int, default=1, help="推理batch size（默认1）"
+    )
     parser.add_argument(
         "--num_samples", type=int, default=50, help="评估样本数量（默认50）"
     )
@@ -228,7 +288,14 @@ def main():
     eval_data = all_data[: args.num_samples]
 
     # 评估模型（不保存返回值，避免警告）
-    evaluate_model(model, tokenizer, eval_data, device, verbose=args.verbose)
+    evaluate_model(
+        model,
+        tokenizer,
+        eval_data,
+        device,
+        verbose=args.verbose,
+        batch_size=args.batch_size,
+    )
 
 
 if __name__ == "__main__":

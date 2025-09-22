@@ -114,68 +114,98 @@ def test_model_with_path(model_path, logger):
         logger.error(f"模型加载失败: {e}")
         return False
 
-    # 定义测试提示
-    prompts_to_test = [
-        "How much is 1+1?",
-        "I have 3 apples, my friend eats one and I give 2 to my sister, how many apples do I have now?",
-        "Solve the equation 6x + 4 = 40",
-        "What is 15% of 200?",
-        "A rectangle has length 8 and width 5. What is its area?",
-    ]
-
-    logger.info(f"\n开始测试模型，共 {len(prompts_to_test)} 个问题")
+    logger.info("\n🤖 GRPO数学问题求解器 - 交互式对话模式")
+    logger.info("=" * 60)
+    logger.info("输入数学问题，模型会为你求解！")
+    logger.info("输入 'quit', 'exit', 'q' 退出程序")
     logger.info("=" * 60)
 
-    # 测试每个提示
-    for i, prompt in enumerate(prompts_to_test, 1):
-        logger.info(f"\n【问题 {i}/{len(prompts_to_test)}】")
-
-        # 准备提示
-        test_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
-        test_prompt = build_prompt(test_messages)
-
-        # 生成响应
-        test_input_ids = loaded_tokenizer.encode(
-            test_prompt, return_tensors="pt", padding=True, padding_side="left"
-        ).to(device)
-
-        with torch.no_grad():
-            test_output_ids = loaded_model.generate(
-                test_input_ids,
-                max_new_tokens=400,
-                temperature=0.7,
-                num_return_sequences=1,
-                pad_token_id=loaded_tokenizer.pad_token_id,
-                eos_token_id=loaded_tokenizer.eos_token_id,
-                do_sample=True,
-                early_stopping=False,
-            )
-
-        test_response = loaded_tokenizer.decode(
-            test_output_ids[0], skip_special_tokens=True
-        )
-
-        # 显示结果
-        logger.info(f"问题: {prompt}")
-
+    while True:
         try:
-            extracted_answer = extract_answer_from_model_output(test_response)
-            logger.info(f"提取的答案: {extracted_answer}")
-        except Exception as e:
-            logger.info(f"答案提取失败: {e}")
-            logger.info("完整回答:")
-            logger.info(
-                test_response[:500] + "..."
-                if len(test_response) > 500
-                else test_response
+            # 获取用户输入
+            user_input = input("\n🧮 请输入数学问题: ").strip()
+
+            # 检查退出命令
+            if user_input.lower() in ["quit", "exit", "q", ""]:
+                print("👋 再见！")
+                break
+
+            if not user_input:
+                continue
+
+            print(f"\n📝 问题: {user_input}")
+            print("🤖 回答: ", end="", flush=True)
+
+            # 准备提示
+            test_messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_input},
+            ]
+            test_prompt = build_prompt(test_messages)
+
+            # 生成响应 - 流式输出
+            test_input_ids = loaded_tokenizer.encode(
+                test_prompt, return_tensors="pt", padding=True, padding_side="left"
+            ).to(device)
+
+            # 使用标准generate方法（确保正确性）
+            with torch.no_grad():
+                test_output_ids = loaded_model.generate(
+                    test_input_ids,
+                    max_new_tokens=400,
+                    num_return_sequences=1,
+                    pad_token_id=loaded_tokenizer.pad_token_id,
+                    eos_token_id=loaded_tokenizer.eos_token_id,
+                    do_sample=False,  # 确定性生成
+                    early_stopping=False,
+                    # 覆盖generation_config中的采样参数
+                    temperature=1.0,
+                    top_p=1.0,
+                    top_k=0,
+                )
+
+            # 获取完整响应
+            test_response = loaded_tokenizer.decode(
+                test_output_ids[0], skip_special_tokens=True
             )
 
-        logger.info("-" * 60)
+            # 提取新生成的部分（去掉prompt）
+            original_prompt = loaded_tokenizer.decode(
+                test_input_ids[0], skip_special_tokens=True
+            )
+            if test_response.startswith(original_prompt):
+                generated_part = test_response[len(original_prompt) :].strip()
+            else:
+                generated_part = test_response
 
-    logger.info("\n测试完成！")
+            # 流式显示效果（模拟）
+            import time
+
+            for char in generated_part:
+                print(char, end="", flush=True)
+                time.sleep(0.01)  # 打字机效果
+
+            print()  # 换行
+
+            # 提取最终答案
+            try:
+                extracted_answer = extract_answer_from_model_output(generated_part)
+                if extracted_answer:
+                    print(f"\n💡 提取的答案: {extracted_answer}")
+                else:
+                    print("\n⚠️  无法从回答中提取明确答案")
+
+            except Exception as e:
+                print(f"\n❌ 答案提取失败: {e}")
+
+        except KeyboardInterrupt:
+            print("\n\n👋 程序被中断，再见！")
+            break
+        except Exception as e:
+            print(f"\n❌ 发生错误: {e}")
+            print("请重试或输入 'quit' 退出")
+
+    logger.info("\n测试会话结束！")
     return True
 
 

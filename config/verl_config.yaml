@@ -1,0 +1,49 @@
+# VERL 8*V100 3B模型 GRPO训练配置
+distributed:
+  backend: "nccl"
+  init_method: "env://"
+  world_size: 8        # 8张V100
+  rank: -1             # 自动分配
+  strategy: "fsdp2"    # 使用FSDP2而不是DeepSpeed
+
+# GRPO训练配置（3B模型优化）
+grpo:
+  algorithm: "grpo"           # 指定使用GRPO算法
+  learning_rate: 1e-6         # 3B模型用更小学习率
+  batch_size: 16              # 全局batch size
+  mini_batch_size: 2          # 每GPU batch size (16/8=2)
+  num_epochs: 2               # 对应原来的mu
+  max_grad_norm: 0.5          # 3B模型用更大梯度裁剪
+  beta: 0.02                  # 更小的KL penalty
+  epsilon: 0.1                # PPO clip参数
+  
+# 生成配置（3B模型优化）
+generation:
+  max_new_tokens: 400
+  num_return_sequences: 12    # 每个prompt生成12个回答
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+  do_sample: true
+
+# 训练流程配置
+training:
+  num_iterations: 2           # 2个大迭代
+  num_steps: 1500            # 每迭代1500步
+  save_interval: 100         # 每100步保存检查点
+  eval_interval: 200         # 每200步评估一次
+  log_interval: 10           # 每10步记录日志
+
+# 数据配置
+data:
+  eval_size: 100
+  max_prompt_length: 512
+  max_response_length: 400
+
+# V100特定优化
+optimization:
+  fp16: true                 # V100用fp16而不是bf16
+  gradient_checkpointing: true
+  use_cache: false
+  fsdp_cpu_offload: false    # V100显存够用，不需要CPU offload
+  activation_checkpointing: true

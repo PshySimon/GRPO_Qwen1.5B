@@ -77,12 +77,26 @@ pip install -r requirements.txt
 ```
 
 ### 3. 开始训练
+
+#### 单卡训练
 ```bash
 # 从头开始训练
 python scripts/train.py
 
 # 从断点续训
 python scripts/train.py --resume
+```
+
+#### 多卡训练（使用VERL框架）
+```bash
+# 多卡训练（自动检测GPU数量）
+./scripts/train_multicard.sh
+
+# 指定GPU数量
+CUDA_VISIBLE_DEVICES=0,1,2,3 ./scripts/train_multicard.sh
+
+# 从断点续训
+./scripts/train_multicard.sh --resume
 ```
 
 ### 4. 可视化训练结果
@@ -130,6 +144,13 @@ python scripts/test_model.py
 - `learning_rate`: 学习率
 - `mu`: 每个批次的策略更新次数
 - `epsilon`: PPO裁剪参数
+
+### VERL多卡配置 (config/verl_config.yaml)
+- `distributed.world_size`: GPU总数（-1自动检测）
+- `ppo.batch_size`: 全局批次大小
+- `ppo.mini_batch_size`: 每个GPU的批次大小
+- `training.save_interval`: 检查点保存间隔
+- `training.eval_interval`: 评估间隔
 
 ### 模型配置 (config/model.yaml)
 - `model_name`: 预训练模型名称
